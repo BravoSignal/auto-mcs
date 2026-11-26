@@ -136,9 +136,7 @@ Architecture: arm64-v8a
 Bootstrap:    SDL2
 ```
 
-The application is currently locked to landscape orientation.
-
-Portrait support exists in the runtime but is disabled for now. The orientation configuration and rotation hooks are left beside the active landscape implementation so it can be restored without rebuilding the feature.
+The application supports portrait and landscape. The manifest uses `fullUser`, so it follows the sensor but respects the system auto-rotate lock.
 
 ## Source patches
 
@@ -174,23 +172,35 @@ The normal UI still runs through Kivy and the existing desktop views.
 
 auto-mcs uses a logical SDL surface rather than rendering the desktop UI directly at the device's native resolution.
 
-The default logical short edge is:
+The logical short edge depends on orientation, because the desktop UI needs more horizontal room than vertical room:
 
 ```text
-720
+Landscape height: 720
+Portrait width:   800
 ```
 
-It can be overridden with:
+They can be overridden with:
 
 ```sh
 AUTO_MCS_ANDROID_HEIGHT=720
+AUTO_MCS_ANDROID_PORTRAIT_WIDTH=800
 ```
 
 The SDL surface is scaled to the physical display and incoming touch coordinates are adjusted back into logical coordinates before Kivy receives them.
 
-The app is currently forced into landscape and normalizes the initial Android display metrics accordingly.
+A global-layout listener reconfigures the SDL surface whenever the window size changes. When the orientation flips between portrait and landscape, the visible page is rebuilt so pages that pick their arrangement on creation re-layout. Progress screens and open dialogs are left alone.
 
-Runtime rotation support is retained but disabled while portrait layouts are unfinished.
+### Portrait layout
+
+In portrait, `patches/source.py` adjusts the desktop UI for one-handed use:
+
+- page titles use 90% of the header width instead of being truncated
+- the footer hides the version label so the breadcrumb has room
+- main menu pages use the full screen height, so the logo sits on top and the buttons move into thumb reach, kept grouped together
+- primary buttons are widened to about 80% of the screen
+- the server taskbar at the bottom is wider, taller, and has larger icons
+
+Landscape keeps the previous layout.
 
 ## System bars
 

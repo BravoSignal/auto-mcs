@@ -118,21 +118,13 @@ runtime.configure_kivy(Config)""",
         name = 'utility',
     )
 
-    # Override back/'ESC' handling and configure runtime display rotation
-    # init.prepend(
-    #     'MainApp.on_start',
-    #     """if constants.is_android:
-    # runtime.bind_escape(Window, utility)
-    # runtime.bind_rotation(utility)""",
-    #     'install Android runtime navigation and rotation handlers',
-    # )
-    # Portrait support - runtime.bind_rotation(utility)
-    # Look at 232efba0c71328f2d97d487a4a37de86d66a905e to restore portrait
+    # Override back/'ESC' handling and follow device rotation (portrait + landscape)
     init.prepend(
         'MainApp.on_start',
         """if constants.is_android:
-        runtime.bind_escape(Window, utility)""",
-        'route Android escape through normal UI navigation',
+        runtime.bind_escape(Window, utility)
+        runtime.bind_rotation(utility)""",
+        'install Android runtime navigation and rotation handlers',
     )
 
     # Android owns native window sizing/positioning
@@ -183,8 +175,17 @@ runtime.configure_kivy(Config)""",
 font_size = sp(30)
 y_offset = dp(3)
 if width_ratio is None:
-    width_ratio = 0.48""",
+    width_ratio = 0.9 if Window.height > Window.width else 0.48""",
         'configure Android page title layout',
+    )
+
+    # The footer cannot fit both the breadcrumb and version on a narrow screen
+    pages.before_return(
+        'footer_label',
+        'final_layout',
+        """if constants.is_android and Window.height > Window.width:
+    version.opacity = 0""",
+        'hide footer version text in Android portrait',
     )
 
 
@@ -231,6 +232,29 @@ if width_ratio is None:
     )
 
 
+    # ----------------------------------------- ui/desktop/widgets/layouts.py ------------------------------------------
+    layouts = SourcePatch(source / 'ui' / 'desktop' / 'widgets' / 'layouts.py')
+
+    # Desktop menus compress into a centered 1080px band. On a tall portrait
+    # screen, use the full height instead so the logo stays on top and the
+    # action buttons move down into thumb reach.
+    layouts.prepend(
+        'MenuLayout.menu_y',
+        """if constants.is_android and Window.height > Window.width:
+    return position""",
+        'use full screen height for Android portrait menus',
+    )
+
+    # ...but keep the main buttons grouped instead of spreading them apart
+    layouts.after_assignment(
+        'MenuLayout.resize_menu_layout',
+        'spacing',
+        """if constants.is_android and Window.height > Window.width and self._menu_layout.height:
+    spacing = (self.menu_control_height + 30) / self._menu_layout.height""",
+        'keep Android portrait menu buttons grouped',
+    )
+
+
     # ----------------------------------------- ui/desktop/widgets/menus.py --------------------------------------------
     menus = SourcePatch(source / 'ui' / 'desktop' / 'widgets' / 'menus.py')
 
@@ -254,6 +278,17 @@ if width_ratio is None:
 
     # ----------------------------------------- ui/desktop/widgets/buttons.py -------------------------------------------
     buttons = SourcePatch(source / 'ui' / 'desktop' / 'widgets' / 'buttons.py')
+
+    # Wider primary buttons are easier to hit with a thumb in portrait.
+    # The icon stays 35px inside the left edge, as on desktop.
+    buttons.prepend(
+        'MainButton.__init__',
+        """if constants.is_android and Window.height > Window.width and width is None and not auto_adjust_icon:
+    width = min(620, Window.width * 0.8)
+    if icon_offset is None:
+        icon_offset = -(width / 2 - 35)""",
+        'widen Android portrait main buttons',
+    )
 
     # Android does not create the desktop keyboard listener
     buttons.remove_call(
@@ -340,6 +375,28 @@ if width_ratio is None:
         constants.update_data['auto-show'] = False
     return""",
         'open Android releases in browser rather than running desktop updater',
+    )
+
+
+    # ----------------------------- ui/desktop/views/server/manager/components.py --------------------------------------
+    components = SourcePatch(source / 'ui' / 'desktop' / 'views' / 'server' / 'manager' / 'components.py')
+
+    # The server taskbar sits at the bottom edge, in thumb reach. In portrait,
+    # stretch it across most of the width with larger icons and touch targets.
+    components.after_assignment(
+        'MenuTaskbar.__init__',
+        'self.size_hint_max',
+        """if constants.is_android and Window.height > Window.width:
+    self.size_hint_max = (min(Window.width - 40, 660 if show_addons else 580), 78)""",
+        'enlarge Android portrait server taskbar',
+    )
+
+    components.after_assignment(
+        'MenuTaskbar.TaskbarItem.Icon.__init__',
+        'self.default_size',
+        """if constants.is_android and Window.height > Window.width:
+    self.default_size = 48""",
+        'enlarge Android portrait server taskbar icons',
     )
 
 

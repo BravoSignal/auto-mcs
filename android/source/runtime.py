@@ -324,51 +324,43 @@ def _set_surface_size(width, height):
     surface.setLayoutParams(params)
 
 
+def logical_landscape_height():
+    return max(int(os.environ.get('AUTO_MCS_ANDROID_HEIGHT', '720')), 1)
+
+
+def logical_portrait_width():
+    return max(int(os.environ.get('AUTO_MCS_ANDROID_PORTRAIT_WIDTH', '800')), 1)
+
+
+def is_portrait(size=None):
+    width, height = size or window_size
+    return height > width
+
+
 def _configure_surface(physical_size=None, retry=True, ui_thread=False):
     global scale_factor, window_size, _surface_scaled
 
-    # Portrait support
-    # if physical_size is None:
-    #     act = _get_activity()
-    #
-    #     DisplayMetrics = _java_class('android.util.DisplayMetrics')
-    #     dm = DisplayMetrics()
-    #     act.getWindowManager().getDefaultDisplay().getMetrics(dm)
-    #
-    #     physical_width = max(int(dm.widthPixels), 1)
-    #     physical_height = max(int(dm.heightPixels), 1)
-    #
-    # else:
-    #     physical_width = max(int(physical_size[0]), 1)
-    #     physical_height = max(int(physical_size[1]), 1)
-    #
-    # physical_size = (physical_width, physical_height)
-    #
-    # logical_short_edge = max(int(os.environ.get('AUTO_MCS_ANDROID_HEIGHT', '720')), 1)
-    #
-    # new_scale = min(physical_width, physical_height) / logical_short_edge
-    # if new_scale <= 0: new_scale = 1.0
+    if physical_size is None:
+        act = _get_activity()
 
-    act = _get_activity()
+        DisplayMetrics = _java_class('android.util.DisplayMetrics')
+        dm = DisplayMetrics()
+        act.getWindowManager().getDefaultDisplay().getMetrics(dm)
 
-    # Orientation could initially be reported as portrait, attempt to force landscape
-    try: act.setRequestedOrientation(0)
-    except Exception: log_exception('Failed to force landscape orientation')
+        physical_width = max(int(dm.widthPixels), 1)
+        physical_height = max(int(dm.heightPixels), 1)
 
-    DisplayMetrics = _java_class('android.util.DisplayMetrics')
-    dm = DisplayMetrics()
-    act.getWindowManager().getDefaultDisplay().getMetrics(dm)
+    else:
+        physical_width = max(int(physical_size[0]), 1)
+        physical_height = max(int(physical_size[1]), 1)
 
-    raw_width = max(int(dm.widthPixels), 1)
-    raw_height = max(int(dm.heightPixels), 1)
-
-    # Normalize display metrics
-    physical_width = max(raw_width, raw_height)
-    physical_height = min(raw_width, raw_height)
     physical_size = (physical_width, physical_height)
 
-    min_height = window_size[1]
-    new_scale = physical_height / max(min_height, 1)
+    # The desktop UI needs more horizontal room than vertical room, so portrait
+    # uses a wider logical short edge than landscape does
+    logical_short_edge = logical_portrait_width() if physical_height > physical_width else logical_landscape_height()
+
+    new_scale = min(physical_width, physical_height) / logical_short_edge
     if new_scale <= 0: new_scale = 1.0
 
     virtual_width = round(physical_width / new_scale)
@@ -443,6 +435,11 @@ def bind_rotation(utility):
         if _keyboard_target is not None and getattr(_keyboard_target, 'focus', False):
             Clock.schedule_once(lambda *_: set_keyboard_target(_keyboard_target, True), 0.1)
 
+        # Many pages choose their arrangement when they are generated, so
+        # rebuild the visible page when switching between portrait and landscape
+        elif is_portrait(old_size) != is_portrait():
+            Clock.schedule_once(lambda *_: _reload_for_orientation(utility), 0.05)
+
 
     class OrientationLayoutListener(PythonJavaClass):
         __javainterfaces__ = ['android/view/ViewTreeObserver$OnGlobalLayoutListener']
@@ -483,11 +480,41 @@ def bind_rotation(utility):
     def install():
         decor.getViewTreeObserver().addOnGlobalLayoutListener(listener)
 
+        # SDL may request an orientation when the window is created; follow the
+        # sensor but keep honoring the system auto-rotate lock
+        try:
+            ActivityInfo = _java_class('android.content.pm.ActivityInfo')
+            activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER)
+        except Exception:
+            log_exception('Failed to request user-controlled Android rotation')
+
     if not _run_on_ui_thread(install):
         raise RuntimeError('Unable to install Android orientation listener')
 
     _orientation_listener = listener
     log('Installed Android orientation listener')
+
+
+def _reload_for_orientation(utility):
+    try:
+        screen = utility.screen_manager.current_screen
+        if screen is None: return
+
+        name = screen.__class__.__name__
+
+        # Never interrupt long-running work or an open dialog
+        if name.endswith('ProgressScreen') or getattr(screen, 'popup_widget', None): return
+        if not getattr(screen, 'reload_page', False) or not hasattr(screen, 'on_pre_enter'): return
+
+        if getattr(screen, 'resize_bind', None):
+            from kivy.core.window import Window
+            Window.unbind(on_resize=screen.resize_bind)
+
+        screen.on_pre_enter()
+        log(f"Rebuilt '{name}' for {'portrait' if is_portrait() else 'landscape'} layout")
+
+    except Exception:
+        log_exception('Failed to rebuild page after Android rotation')
 
 
 def configure_system_bars():
